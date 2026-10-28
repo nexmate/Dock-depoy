@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -135,10 +136,19 @@ func (s *server) deleteStack(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	// A never-deployed stack makes `down` fail; that's fine, only busy blocks deletion.
-	if err := s.Jobs.RunSync(r.Context(), name, s.Stacks.Dir(name), "down"); errors.Is(err, compose.ErrBusy) {
+	// Finish `down` even if the client goes away, so a half-run teardown never loses its folder.
+	err := s.Jobs.RunSync(context.WithoutCancel(r.Context()), name, s.Stacks.Dir(name), "down")
+	if errors.Is(err, compose.ErrBusy) {
 		writeErr(w, err)
 		return
+	}
+	// A never-deployed stack makes `down` fail; that's fine only if no containers are left.
+	if err != nil {
+		projects, perr := s.Docker.ProjectContainers(r.Context())
+		if perr != nil || len(projects[name]) > 0 {
+			writeError(w, http.StatusInternalServerError, "docker compose down failed; stack kept", err.Error())
+			return
+		}
 	}
 	if err := s.Stacks.Delete(name); err != nil {
 		writeErr(w, err)
@@ -171,7 +181,8 @@ func (s *server) streamJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "job not found", "")
 		return
 	}
-	sse := newSSE(w)
+	sse, stop := newSSE(w)
+	defer stop()
 	for ev := range job.Subscribe(r.Context()) {
 		if ev.Done {
 			sse.send("done", map[string]int{"exitCode": ev.ExitCode})
@@ -203,7 +214,8 @@ func (s *server) containerLogs(w http.ResponseWriter, r *http.Request) {
 	if err != nil || tail <= 0 {
 		tail = 200
 	}
-	sse := newSSE(w)
+	sse, stop := newSSE(w)
+	defer stop()
 	err = s.Docker.Logs(r.Context(), r.PathValue("id"), tail, func(line string) { sse.send("line", line) })
 	if err != nil {
 		sse.send("error", err.Error())

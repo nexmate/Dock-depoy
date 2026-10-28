@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"mime"
 	"net/http"
 
 	"github.com/nenad/docker-depoy/api/internal/compose"
@@ -45,6 +46,11 @@ func writeErr(w http.ResponseWriter, err error) {
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
+	// Requiring JSON forces a CORS preflight for any cross-site form-style request.
+	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
+		writeError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json", "")
+		return false
+	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(v); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body", err.Error())
 		return false

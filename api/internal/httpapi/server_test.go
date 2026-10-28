@@ -88,6 +88,9 @@ func (h *harness) do(method, path, body string) *httptest.ResponseRecorder {
 		rd = strings.NewReader(body)
 	}
 	req := httptest.NewRequest(method, path, rd)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	if h.cookie != nil {
 		req.AddCookie(h.cookie)
 	}
@@ -248,5 +251,57 @@ func TestContainersAndLogs(t *testing.T) {
 	expect(t, rec, 200)
 	if !strings.Contains(rec.Body.String(), "event: line\ndata: \"log line 2\"\n\n") {
 		t.Fatalf("logs = %q", rec.Body)
+	}
+}
+
+func TestRejectsCrossOriginWrites(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	expect(t, h.do("POST", "/api/stacks", `{"name":"web","compose":"services: {}"}`), 201)
+	req := httptest.NewRequest("POST", "/api/stacks/web/down", nil)
+	req.AddCookie(h.cookie)
+	req.Header.Set("Sec-Fetch-Site", "same-site")
+	rec := httptest.NewRecorder()
+	h.h.ServeHTTP(rec, req)
+	expect(t, rec, 403)
+}
+
+func TestRequiresJSONContentType(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	req := httptest.NewRequest("POST", "/api/stacks", strings.NewReader(`{"name":"web","compose":"services: {}"}`))
+	req.AddCookie(h.cookie)
+	req.Header.Set("Content-Type", "text/plain")
+	rec := httptest.NewRecorder()
+	h.h.ServeHTTP(rec, req)
+	expect(t, rec, 415)
+}
+
+func TestJobStreamHeartbeat(t *testing.T) {
+	old := heartbeatInterval
+	heartbeatInterval = 5 * time.Millisecond
+	defer func() { heartbeatInterval = old }()
+	h := newHarness(t)
+	h.login()
+	expect(t, h.do("POST", "/api/stacks", `{"name":"web","compose":"services: {}"}`), 201)
+	h.runner.hold = make(chan struct{})
+	rec := h.do("POST", "/api/stacks/web/up", "")
+	var job struct{ JobID string }
+	_ = json.Unmarshal(rec.Body.Bytes(), &job)
+	go func() { time.Sleep(60 * time.Millisecond); close(h.runner.hold) }()
+	rec = h.do("GET", "/api/jobs/"+job.JobID+"/stream", "")
+	if !strings.Contains(rec.Body.String(), ": ping\n\n") {
+		t.Fatalf("no heartbeat in %q", rec.Body)
+	}
+}
+
+func TestDeleteKeepsFolderWhenDownFailsWithContainers(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.runner.downCode = 1 // fake docker reports a running container for "web"
+	expect(t, h.do("POST", "/api/stacks", `{"name":"web","compose":"services: {}"}`), 201)
+	expect(t, h.do("DELETE", "/api/stacks/web", ""), 500)
+	if _, err := os.Stat(h.deps.Stacks.Dir("web")); err != nil {
+		t.Fatal("folder must be kept when containers remain")
 	}
 }

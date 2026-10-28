@@ -50,7 +50,7 @@ function StackDetail() {
   const router = useRouter()
   const search = useSearchParams()
   const qc = useQueryClient()
-  const { data: stack, error, isLoading } = useQuery({
+  const { data: stack, error, isLoading, isFetchedAfterMount } = useQuery({
     queryKey: keys.stack(name),
     queryFn: () => api.getStack(name),
   })
@@ -69,8 +69,9 @@ function StackDetail() {
   const action = useStackAction()
   const dirty = saved !== null && (compose !== saved.compose || env !== saved.env)
 
-  // Load files into the editor once per stack; refetches never overwrite edits.
-  if (stack && saved === null) {
+  // Load files into the editor once per stack, from a fresh fetch (never a cached copy that
+  // may be stale); later refetches never overwrite edits.
+  if (stack && isFetchedAfterMount && saved === null) {
     setCompose(stack.compose)
     setEnv(stack.env)
     setSaved({ compose: stack.compose, env: stack.env })
@@ -118,6 +119,8 @@ function StackDetail() {
   async function remove() {
     try {
       await api.deleteStack(name)
+      qc.removeQueries({ queryKey: keys.stack(name) })
+      qc.removeQueries({ queryKey: keys.containers(name) })
       await qc.invalidateQueries({ queryKey: keys.stacks })
       toast.success(`Stack ${name} deleted`)
       router.push("/stacks")

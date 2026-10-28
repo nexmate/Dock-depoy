@@ -43,7 +43,8 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found", "")
 	})
-	return mux
+	// Rejects cross-origin (incl. same-site, other-port) browser writes; SameSite cookies alone do not.
+	return http.NewCrossOriginProtection().Handler(mux)
 }
 
 func (s *server) authenticated(r *http.Request) bool {

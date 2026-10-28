@@ -7,6 +7,11 @@ const nextConfig: NextConfig = {
   output: "standalone",
   // Compression would buffer Server-Sent Events from the API.
   compress: false,
+  experimental: {
+    // The rewrite proxy drops idle connections after 30s by default; log streams and
+    // `docker compose down` can stay quiet longer (the API also sends SSE heartbeats).
+    proxyTimeout: 3_600_000,
+  },
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${apiUrl}/api/:path*` }]
   },
