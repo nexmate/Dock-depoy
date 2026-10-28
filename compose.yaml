@@ -1,0 +1,28 @@
+name: docker-depoy
+
+services:
+  api:
+    build: ./api
+    restart: unless-stopped
+    environment:
+      STACKS_DIR: /opt/stacks
+      DATA_DIR: /data
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same path inside and outside so relative bind mounts in stacks resolve on the host.
+      - /opt/stacks:/opt/stacks
+      - dd-data:/data
+
+  web:
+    build:
+      context: ./web
+      args:
+        API_URL: http://api:8080
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "${DD_PORT:-5001}:3000"
+
+volumes:
+  dd-data:
